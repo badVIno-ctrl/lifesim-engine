@@ -1,0 +1,23 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true,
+		"resolveJsonModule": true,
+		"noEmit": true,
+		"jsx": "react-jsx",
+		"strict": true,
+		"noUncheckedIndexedAccess": false,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"skipLibCheck": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"isolatedModules": true,
+		"verbatimModuleSyntax": true,
+		"types": ["node", "vite/client", "vite-plugin-pwa/client"]
+	},
+	"include": ["src", "server", "test", "vite.config.ts"]
+}
