@@ -451,7 +451,7 @@ export function GameScreen(props: {
 					<Scene2D
 						state={s}
 						busy={busy}
-						onPickPerson={(name) => void send(`поговорить с ${name}`)}
+						onPickPerson={(name) => void send(`поговорить: ${name}`)}
 					/>
 
 					<article className="scene-prose" aria-live="polite">

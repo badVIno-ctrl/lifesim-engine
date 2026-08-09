@@ -5,6 +5,7 @@ import { createInterface } from "node:readline/promises"
 import { stdin, stdout, env, argv, exit } from "node:process"
 import { join } from "node:path"
 import { openAiCompatible } from "../llm.ts"
+import { createLocalNarrator, suggestActions } from "../narrator/index.ts"
 import { Session, createGameRecord } from "../session.ts"
 import { createFsStorage } from "../storage/fs.ts"
 import { stateFromPack } from "../packs.ts"
@@ -22,15 +23,12 @@ async function main(): Promise<void> {
 		exit(1)
 	}
 
+	// Без ключа терминал играет своим движком — как и браузер.
+	// Ключ включает модель: SIM_API_KEY=... npm run play.
 	const baseUrl = env.SIM_BASE_URL ?? "https://api.openai.com/v1"
 	const apiKey = env.SIM_API_KEY ?? ""
 	const model = env.SIM_MODEL ?? "gpt-4o-mini"
-	if (!apiKey) {
-		stdout.write(
-			"Ключ не задан. Для CLI: SIM_API_KEY=... npm run play. В веб-версии ключ вводится в настройках.\n",
-		)
-		exit(1)
-	}
+	const local = !apiKey
 
 	const storage = createFsStorage(join(PROJECT_ROOT, ".sim-cli"))
 	const state = stateFromPack(pack)
@@ -46,32 +44,43 @@ async function main(): Promise<void> {
 		record,
 		storage,
 		prompts: { core: prompts.core, schema: prompts.schema },
-		llm: openAiCompatible({
-			baseUrl,
-			apiKey,
-			model,
-			temperature: Number(env.SIM_TEMPERATURE ?? 0.8),
-			structured: env.SIM_STRUCTURED !== "0",
-		}),
-		modelName: model,
+		...(local
+			? { narrator: createLocalNarrator() }
+			: {
+					llm: openAiCompatible({
+						baseUrl,
+						apiKey,
+						model,
+						temperature: Number(env.SIM_TEMPERATURE ?? 0.8),
+						structured: env.SIM_STRUCTURED !== "0",
+					}),
+				}),
+		twoPhase: env.SIM_TWO_PHASE === "1",
+		modelName: local ? "свой движок" : model,
 	})
 
 	stdout.write(`${renderSnapshot(session.state, { spoilers: false })}\n\n`)
-	stdout.write("Пишите действие. Команды: ((снапшот)) ((аудит)) ((лог)) ((цены)) ((откат)) ((экспорт)). Выход — :q\n\n")
+	stdout.write(`Рассказчик: ${local ? "свой движок (без ключа)" : model}\n`)
+	stdout.write("Пишите действие. Команды: ((снапшот)) ((аудит)) ((лог)) ((цены)) ((откат)) ((экспорт)). Выход — :q\n")
+	stdout.write(`Можно так: ${suggestActions(session.state, 4).map((a) => a.text).join(" · ")}\n\n`)
 
 	const rl = createInterface({ input: stdin, output: stdout })
 	for (;;) {
 		const line = (await rl.question("> ")).trim()
 		if (line === ":q" || line === "") break
-		const out = await session.turn(line, {
-			onToken: (chunk) => stdout.write(chunk),
-		})
+		// Свой движок отдаёт сцену целиком, поэтому поток ему не нужен:
+		// иначе текст печатался бы дважды.
+		const out = await session.turn(line, local ? {} : { onToken: (chunk) => stdout.write(chunk) })
 		for (const e of out.entries) {
-			if (e.kind === "prose") continue
+			// Прозу своего движка поток не отдаёт по кускам: печатаем целиком.
+			if (e.kind === "prose") {
+				if (local) stdout.write(`${e.text}\n`)
+				continue
+			}
 			if (e.kind === "player") continue
 			stdout.write(`\n${e.text}\n`)
 		}
-		stdout.write("\n\n")
+		stdout.write(`\n[ход ${session.state.clock.turn} · день ${session.state.clock.day} · ${session.state.money} ${session.state.meta.currency}]\n\n`)
 	}
 	rl.close()
 }

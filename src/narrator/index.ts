@@ -125,14 +125,16 @@ export function suggestActions(state: State, limit = 8): SuggestedAction[] {
 		push({
 			id: `talk:${n.name}`,
 			label: `Поговорить: ${n.name}`,
-			text: `поговорить с ${n.name}`,
+			// Двоеточие вместо предлога: имя остаётся в именительном падеже,
+			// а реплика игрока не превращается в «поговорить с Марта».
+			text: `поговорить: ${n.name}`,
 			hint: n.promises.length ? `вы обещали: ${n.promises[0]}` : "разговор ничего не стоит, кроме времени",
 			tone: "люди",
 		})
 		push({
 			id: `ask:${n.name}`,
 			label: `Расспросить: ${n.name}`,
-			text: `спросить ${n.name} о том, что здесь происходит`,
+			text: `расспросить: ${n.name}`,
 			hint: "вопросы дают зацепки, а не ответы",
 			tone: "люди",
 		})
