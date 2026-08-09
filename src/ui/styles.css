@@ -841,7 +841,7 @@ input[type="range"] {
 
 .kv {
 	display: grid;
-	grid-template-columns: minmax(96px, 38%) 1fr;
+	grid-template-columns: minmax(96px, 210px) 1fr;
 	gap: 2px 12px;
 	font-size: 15px;
 	padding: 1px 0;
@@ -857,10 +857,11 @@ input[type="range"] {
 	gap: 8px;
 	margin-bottom: 4px;
 	font-size: 14px;
+	max-width: 480px;
 }
 
 .bar .name {
-	flex: 0 0 40%;
+	flex: 0 0 210px;
 	color: var(--ink-faint);
 	font-size: 13px;
 }

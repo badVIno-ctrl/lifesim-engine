@@ -179,17 +179,6 @@ export function SettingsScreen(props: {
 						</em>
 					</span>
 				</label>
-				</>
-				)}
-
-				<label className="toggle">
-					<input type="checkbox" checked={s.debug} onChange={(e) => patch({ debug: e.target.checked })} />
-					<span>
-						Режим отладки
-						<em className="faint"> — сырая дельта, что применилось, что отклонено, токены</em>
-					</span>
-				</label>
-
 				<label className="toggle">
 					<input type="checkbox" checked={s.stream} onChange={(e) => patch({ stream: e.target.checked })} />
 					<span>
@@ -207,6 +196,17 @@ export function SettingsScreen(props: {
 					<span>
 						Structured output (json_schema)
 						<em className="faint"> — схема дельты генерится из типов; при отказе отключается сама</em>
+					</span>
+				</label>
+
+				</>
+				)}
+
+				<label className="toggle">
+					<input type="checkbox" checked={s.debug} onChange={(e) => patch({ debug: e.target.checked })} />
+					<span>
+						Режим отладки
+						<em className="faint"> — сырая дельта, что применилось, что отклонено, токены</em>
 					</span>
 				</label>
 
