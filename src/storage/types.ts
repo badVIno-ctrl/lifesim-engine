@@ -2,12 +2,15 @@
 // Реализации: indexeddb.ts (браузер), fs.ts (CLI/тесты), memory.ts (тесты).
 import type { Delta, EngineFact, State } from "../types.ts"
 import type { LlmMessage, LlmUsage } from "../llm.ts"
+import type { NarratorMemory } from "../narrator/plan.ts"
 
 export type TranscriptKind = "player" | "prose" | "engine" | "system"
 
 /** G. Всё, что показывает режим отладки рядом с ходом. */
 export type TurnDebug = {
 	rawDelta: string | null
+	/** Своим движком: почему исход получился таким. У модели пусто. */
+	reasoning?: string
 	applied: string[]
 	rejected: { code: string; text: string }[]
 	directives: string[]
@@ -39,9 +42,14 @@ export type GameRecord = {
 	/** H. Только хвост переписки; старое заменяется снапшотом. */
 	history: LlmMessage[]
 	digest: string | null
-	/** A. Факты движка, которые ещё не были показаны модели. */
+	/** A. Факты движка, которые ещё не были показаны рассказчику. */
 	pendingFacts: EngineFact[]
 	lastDelta?: Delta | null
+	/**
+	 * Память своего движка: какие шаблоны уже звучали. Живёт в записи партии,
+	 * а не в состоянии, потому что состояние меняет только applyDelta.
+	 */
+	narratorMemory?: NarratorMemory | null
 }
 
 /** C. Кадр стека отката: всё, что нужно, чтобы вернуться без участия модели. */
@@ -51,6 +59,7 @@ export type UndoFrame = {
 	historyLength: number
 	digest: string | null
 	pendingFacts: EngineFact[]
+	narratorMemory?: NarratorMemory | null
 }
 
 export type GameSummary = {

@@ -13,7 +13,8 @@
 		"build": "vite build",
 		"test": "tsx --test test/*.test.ts",
 		"typecheck": "tsc --noEmit",
-		"play": "tsx src/node/cli.ts"
+		"play": "tsx src/node/cli.ts",
+		"golden": "tsx src/node/golden.ts"
 	},
 	"dependencies": {
 		"@hono/node-server": "^1.13.7",

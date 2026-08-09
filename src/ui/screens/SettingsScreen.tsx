@@ -50,9 +50,64 @@ export function SettingsScreen(props: {
 		}
 	}
 
+	const local = s.engine === "local"
+
 	return (
 		<Screen title="Настройки" subtitle="ключ хранится только в этом браузере" onBack={props.onBack}>
 			<div className="stack">
+				{/* Первый выбор на экране — кто рассказывает. Всё остальное ниже
+				    имеет смысл только во втором случае. */}
+				<section className="tuning">
+					<header className="tuning-head">
+						<h3>Рассказчик</h3>
+						<span className="tuning-label" data-custom={local ? "no" : "yes"}>
+							{local ? "свой движок" : "модель по ключу"}
+						</span>
+					</header>
+					<div className="tuning-presets" role="radiogroup" aria-label="Кто ведёт ход">
+						<label className="tuning-preset" data-on={local ? "yes" : "no"}>
+							<input
+								type="radio"
+								name="engine"
+								checked={local}
+								onChange={() => patch({ engine: "local" })}
+							/>
+							<span className="tuning-preset-body">
+								<strong>Свой движок</strong>
+								<span className="muted">
+									Играет без ключей и без сети. Видит состояние целиком, поэтому не выдумывает
+									чисел и всегда отрабатывает требования движка. Пишет суше живой модели.
+								</span>
+							</span>
+						</label>
+						<label className="tuning-preset" data-on={local ? "no" : "yes"}>
+							<input
+								type="radio"
+								name="engine"
+								checked={!local}
+								onChange={() => patch({ engine: "llm" })}
+							/>
+							<span className="tuning-preset-body">
+								<strong>Модель по ключу</strong>
+								<span className="muted">
+									Проза живее, но нужен ключ, сеть и токены. Ключ хранится только в этом браузере и
+									уходит ровно в тот эндпоинт, который вы укажете.
+								</span>
+							</span>
+						</label>
+					</div>
+				</section>
+
+				<label className="field">
+					<span>Вид по умолчанию</span>
+					<select value={s.view} onChange={(e) => patch({ view: e.target.value as Settings["view"] })}>
+						<option value="2d">2D-сцена и колода действий</option>
+						<option value="text">Только текст</option>
+					</select>
+				</label>
+
+				{local ? null : (
+				<>
 				<label className="field">
 					<span>Базовый URL эндпоинта (совместимый с OpenAI API)</span>
 					<input
@@ -110,6 +165,24 @@ export function SettingsScreen(props: {
 				{probe ? <Notice kind={probe.ok ? "good" : "bad"}>{probe.message}</Notice> : null}
 
 				<label className="toggle">
+					<input
+						type="checkbox"
+						checked={s.twoPhase}
+						onChange={(e) => patch({ twoPhase: e.target.checked })}
+					/>
+					<span>
+						Двухфазный ход
+						<em className="faint">
+							{" "}
+							— сначала дельта, потом проза по уже применённому состоянию. Проза перестаёт описывать
+							то, что движок отклонил. Стоит два запроса вместо одного
+						</em>
+					</span>
+				</label>
+				</>
+				)}
+
+				<label className="toggle">
 					<input type="checkbox" checked={s.debug} onChange={(e) => patch({ debug: e.target.checked })} />
 					<span>
 						Режим отладки
@@ -161,7 +234,7 @@ export function SettingsScreen(props: {
 					/>
 				</label>
 
-				{s.voice === "whisper" || (s.voice === "auto" && !caps.webSpeech) ? (
+				{!local && (s.voice === "whisper" || (s.voice === "auto" && !caps.webSpeech)) ? (
 					<label className="field">
 						<span>Модель расшифровки</span>
 						<input
@@ -184,8 +257,9 @@ export function SettingsScreen(props: {
 				</label>
 
 				<div className="card faint">
-					Запросы идут через локальный прокси <code>/api/llm</code>: он нужен только чтобы обойти CORS
-					браузера. Никакой логики мира и никакого хранения ключа на сервере нет.
+					{local
+						? "Со своим движком сеть не нужна вообще: ход считается в браузере, партия хранится в браузере, наружу не уходит ничего."
+						: "Запросы идут через локальный прокси /api/llm: он нужен только чтобы обойти CORS браузера. Прокси ходит по белому списку адресов, не логирует ключ и ничего не хранит."}
 				</div>
 
 				<button

@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { normalizeState } from "../engine.ts"
 import { createGameRecord } from "../session.ts"
-import { titleFor } from "../init.ts"
+import { allDefaults, buildStateFromAnswers, titleFor } from "../init.ts"
+import { packs } from "./assets.ts"
 import { createBrowserStorage } from "../storage/indexeddb.ts"
 import type { GameRecord, GameSummary } from "../storage/types.ts"
 import type { Tuning } from "../tuning.ts"
@@ -107,6 +108,34 @@ export function App() {
 		[storage],
 	)
 
+	/**
+	 * «Играть сразу»: партия из первого пака с его же ответами и его же правилами.
+	 * Ни одного вопроса до первой сцены — человек попадает в игру, а не в форму.
+	 */
+	const onQuickStart = useCallback(async () => {
+		try {
+			const list = packs()
+			const pack = list[0]
+			if (!pack) {
+				setError("В папке packs/ нет ни одного мира.")
+				return
+			}
+			const state = buildStateFromAnswers(pack, allDefaults(pack))
+			const rec = createGameRecord({
+				id: newId(),
+				title: titleFor(state),
+				packId: pack.id,
+				state,
+			})
+			await storage.saveGame(rec)
+			await storage.clearUndo(rec.id)
+			await refresh()
+			setRoute({ name: "game", gameId: rec.id })
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e))
+		}
+	}, [storage, refresh])
+
 	const onImport = useCallback(
 		async (text: string) => {
 			try {
@@ -169,6 +198,7 @@ export function App() {
 				gameId={route.gameId}
 				storage={storage}
 				settings={settings}
+				onChangeSettings={applySettings}
 				onBack={async () => {
 					await refresh()
 					setRoute({ name: "start" })
@@ -184,6 +214,7 @@ export function App() {
 			settings={settings}
 			error={error}
 			onContinue={(id) => setRoute({ name: "game", gameId: id })}
+			onQuickStart={onQuickStart}
 			onDelete={onDelete}
 			onExport={onExport}
 			onImport={onImport}

@@ -3,7 +3,7 @@
 // prompt/INIT.md — человеческая версия тех же восьми вопросов; в контекст игры он не попадает.
 import { useMemo, useState } from "react"
 import { Notice, Screen } from "../components/Screen.tsx"
-import { INIT_STEPS, allDefaults, buildStateFromAnswers, defaultAnswer } from "../../init.ts"
+import { ARCHETYPES, INIT_STEPS, allDefaults, buildStateFromAnswers, defaultAnswer } from "../../init.ts"
 import type { InitAnswers } from "../../init.ts"
 import { packById } from "../assets.ts"
 import type { State } from "../../types.ts"
@@ -53,7 +53,7 @@ export function InitWizard(props: {
 			<div className="stack">
 				<div className="wizard-progress" aria-hidden="true">
 					{INIT_STEPS.map((s, i) => (
-						<span key={s.id} className={i <= index ? "done" : ""} />
+						<span key={s.id} className={i === index ? "here" : i < index ? "done" : ""} />
 					))}
 				</div>
 
@@ -61,6 +61,28 @@ export function InitWizard(props: {
 
 				<h2>{step.question}</h2>
 				<p className="muted">{step.hint}</p>
+
+				{/* Пять чисел и три навыка — это то место, где новичок закрывает вкладку.
+				    Четыре понятных человека вместо арифметики убирают барьер, но не
+				    отменяют ручной ввод для тех, кто хочет считать сам. */}
+				{step.id === "constants" ? (
+					<div className="stack">
+						{ARCHETYPES.map((a) => (
+							<button
+								key={a.id}
+								type="button"
+								className={value === a.constants ? "tile selected" : "tile"}
+								onClick={() =>
+									setAnswers((prev) => ({ ...prev, constants: a.constants, skills: a.skills }))
+								}
+							>
+								<strong>{a.title}</strong>
+								<div className="muted">{a.blurb}</div>
+								<div className="faint">{a.constants} · {a.skills}</div>
+							</button>
+						))}
+					</div>
+				) : null}
 
 				{step.kind === "choice" ? (
 					<div className="stack">

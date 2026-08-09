@@ -19,6 +19,8 @@ import {
 } from "./render.ts"
 import { LlmError } from "./llm.ts"
 import type { LlmCallOptions, LlmCaller, LlmMessage } from "./llm.ts"
+import type { Narrator } from "./narrator/index.ts"
+import { EPILOGUE_COMMAND } from "./narrator/index.ts"
 import type { Delta, EngineFact, State } from "./types.ts"
 import type { GameRecord, Storage, TranscriptEntry, TurnDebug, UndoFrame } from "./storage/types.ts"
 
@@ -74,8 +76,20 @@ export type SessionDeps = {
 	record: GameRecord
 	storage: Storage
 	prompts: { core: string; schema: string }
-	llm: LlmCaller
+	/** Рассказчик по сети. Не нужен, если ход ведёт свой движок. */
+	llm?: LlmCaller
+	/**
+	 * Свой движок повествования. Если он задан, сессия не ходит в сеть вовсе:
+	 * ни ключа, ни эндпоинта, ни токенов.
+	 */
+	narrator?: Narrator
 	modelName?: string
+	/**
+	 * Двухфазный ход: сначала дельта, потом проза по уже применённому состоянию.
+	 * Убирает класс багов «проза описала то, что движок отклонил». Цена — два запроса.
+	 * Своему движку не нужен: он и так видит результат до того, как пишет.
+	 */
+	twoPhase?: boolean
 	now?: () => number
 	newId?: () => string
 }
@@ -84,6 +98,12 @@ export type TurnOutcome = {
 	entries: TranscriptEntry[]
 	applied: boolean
 	error?: string
+}
+
+function mergeUsage(a: TurnDebug["usage"], b: TurnDebug["usage"]): TurnDebug["usage"] {
+	if (!a) return b
+	if (!b) return a
+	return { prompt: a.prompt + b.prompt, completion: a.completion + b.completion, total: a.total + b.total }
 }
 
 let counter = 0
@@ -96,7 +116,9 @@ export class Session {
 	record: GameRecord
 	storage: Storage
 	prompts: { core: string; schema: string }
-	llm: LlmCaller
+	llm: LlmCaller | null
+	narrator: Narrator | null
+	twoPhase: boolean
 	modelName: string
 	now: () => number
 	newId: () => string
@@ -105,8 +127,10 @@ export class Session {
 		this.record = deps.record
 		this.storage = deps.storage
 		this.prompts = deps.prompts
-		this.llm = deps.llm
-		this.modelName = deps.modelName ?? ""
+		this.llm = deps.llm ?? null
+		this.narrator = deps.narrator ?? null
+		this.twoPhase = deps.twoPhase === true
+		this.modelName = deps.modelName ?? (deps.narrator ? "свой движок" : "")
 		this.now = deps.now ?? (() => Date.now())
 		this.newId = deps.newId ?? defaultId
 	}
@@ -130,7 +154,7 @@ export class Session {
 	 * H. В модель уходит: CORE + DELTA-SCHEMA + снапшот-дайджест + компактное состояние
 	 * + блок движка (A/D/F) + последние 8 сообщений + реплика игрока. Вся история — никогда.
 	 */
-	buildMessages(playerInput: string, retryNote?: string): LlmMessage[] {
+	buildMessages(playerInput: string, retryNote?: string, extraSystem?: string): LlmMessage[] {
 		const r = this.record
 		const msgs: LlmMessage[] = []
 		msgs.push({ role: "system", content: `${this.prompts.core.trim()}\n\n${this.prompts.schema.trim()}` })
@@ -143,6 +167,7 @@ export class Session {
 		msgs.push({ role: "system", content: renderStateForModel(r.state) })
 		const engineBlock = renderEngineBlock(r.pendingFacts, calendarPressure(r.state))
 		if (engineBlock) msgs.push({ role: "system", content: engineBlock })
+		if (extraSystem) msgs.push({ role: "system", content: extraSystem })
 		for (const m of r.history.slice(-HISTORY_TAIL)) msgs.push(m)
 		msgs.push({
 			role: "user",
@@ -209,6 +234,18 @@ export class Session {
 
 		const r = this.record
 		const started = this.now()
+
+		// Свой движок: ни сети, ни ключа, ни ретраев. Он видит состояние целиком,
+		// поэтому не может ни выдумать чисел, ни промолчать про требования движка.
+		if (this.narrator) return this.localTurn(input, started, opts)
+
+		if (!this.llm) {
+			return this.failTurn(
+				"Ход некому провести: не выбран ни свой движок, ни модель. Откройте настройки.",
+			)
+		}
+		const llm = this.llm
+		if (this.twoPhase) return this.twoPhaseTurn(input, started, opts, llm)
 		let retried = false
 		let messages = this.buildMessages(input)
 
@@ -219,7 +256,7 @@ export class Session {
 		let mode = "text"
 
 		try {
-			let res = await this.llm(messages, opts)
+			let res = await llm(messages, opts)
 			usage = res.usage
 			mode = res.mode
 			if (res.structured) {
@@ -238,7 +275,7 @@ export class Session {
 						input,
 						`предыдущий ответ не разобран (${parsed.error}). Повтори тот же ход целиком: проза, затем ровно один блок <delta>{...}</delta> с валидным JSON без комментариев и без текста после него.`,
 					)
-					res = await this.llm(messages, opts)
+					res = await llm(messages, opts)
 					usage = res.usage ?? usage
 					mode = res.mode
 					if (res.structured) {
@@ -280,6 +317,129 @@ export class Session {
 		})
 	}
 
+	/**
+	 * Двухфазный ход. Первый запрос отдаёт только дельту; движок считает её результат
+	 * начисто (applyDelta детерминирован, поэтому предпросмотр ничего не стоит и ничего
+	 * не меняет); второй запрос пишет прозу по уже применённому состоянию.
+	 * Проза после этого физически не может описать отклонённое.
+	 */
+	private async twoPhaseTurn(
+		input: string,
+		started: number,
+		opts: LlmCallOptions,
+		llm: LlmCaller,
+	): Promise<TurnOutcome> {
+		const r = this.record
+		const directives = calendarPressure(r.state).map((d) => d.text)
+		let delta: Delta | null = null
+		let rawDelta: string | null = null
+		let usage = null as TurnDebug["usage"]
+		let mode = "two-phase"
+
+		try {
+			const first = await llm(
+				this.buildMessages(
+					input,
+					"фаза 1 из 2: верни только дельту. Прозу в этой фазе не пиши — её попросят отдельно, после того как движок применит изменения.",
+				),
+				{ signal: opts.signal },
+			)
+			usage = first.usage
+			if (first.structured) {
+				delta = first.structured.delta
+				rawDelta = JSON.stringify(first.structured.delta)
+			} else {
+				const parsed = parseTurn(first.text)
+				delta = parsed.delta
+				rawDelta = parsed.raw
+			}
+			if (!delta) {
+				return this.failTurn(
+					"Модель не вернула пригодной дельты в первой фазе. Состояние мира не изменилось.",
+				)
+			}
+
+			// Предпросмотр: тот же самый applyDelta, но на копии. Результат совпадёт с итоговым.
+			const preview = applyDelta(r.state, delta)
+			const second = await llm(
+				this.buildMessages(
+					input,
+					undefined,
+					[
+						"фаза 2 из 2: движок уже применил дельту. Опиши сцену по факту и только по факту.",
+						`применилось: ${preview.applied.join("; ") || "ничего"}`,
+						`отклонено движком (в прозе этого НЕ было): ${
+							preview.facts
+								.filter((f) => f.kind === "rejection" || f.kind === "limit")
+								.map((f) => f.text)
+								.join("; ") || "ничего"
+						}`,
+						"Верни только прозу, без блока дельты.",
+					].join("\n"),
+				),
+				opts,
+			)
+			usage = mergeUsage(usage, second.usage)
+			const prose = (second.structured ? second.structured.prose : parseTurn(second.text).prose).trim()
+			return this.commit(input, prose || "(рассказчик не прислал текст сцены)", delta, {
+				rawDelta,
+				usage,
+				mode,
+				ms: this.now() - started,
+				contextMessages: 2,
+				retried: false,
+				directives,
+			})
+		} catch (e) {
+			mode = "two-phase"
+			const msg =
+				e instanceof LlmError
+					? e.message
+					: `Не удалось выполнить ход: ${e instanceof Error ? e.message : String(e)}`
+			return this.failTurn(msg)
+		}
+	}
+
+	/** Ход своим движком. Мгновенный, детерминированный, без сети. */
+	private async localTurn(
+		input: string,
+		started: number,
+		opts: LlmCallOptions,
+	): Promise<TurnOutcome> {
+		const r = this.record
+		const narrator = this.narrator
+		if (!narrator) return this.failTurn("Свой движок не подключён.")
+		const directives = calendarPressure(r.state)
+		let out
+		try {
+			out = narrator({
+				state: r.state,
+				input: input === "((эпилог))" ? EPILOGUE_COMMAND : input,
+				directives,
+				facts: r.pendingFacts,
+				memory: r.narratorMemory ?? null,
+			})
+		} catch (e) {
+			// Сбой рассказчика не имеет права стоить игроку состояния.
+			return this.failTurn(
+				`Свой движок не смог собрать сцену: ${e instanceof Error ? e.message : String(e)}. Состояние мира не изменилось.`,
+			)
+		}
+		// Поток нужен интерфейсу, а не движку: сцена уже готова целиком.
+		opts.onToken?.(out.prose)
+		r.narratorMemory = out.memory
+		return this.commit(input, out.prose, out.delta, {
+			rawDelta: JSON.stringify(out.delta),
+			usage: null,
+			mode: "local",
+			ms: this.now() - started,
+			contextMessages: 0,
+			retried: false,
+			directives: directives.map((d) => d.text),
+			reasoning: out.trace,
+		})
+	}
+
 	private async failTurn(message: string): Promise<TurnOutcome> {
 		const e = this.entry("system", message)
 		this.record.transcript.push(e)
@@ -300,6 +460,7 @@ export class Session {
 			contextMessages: number
 			retried: boolean
 			directives: string[]
+			reasoning?: string
 		},
 	): Promise<TurnOutcome> {
 		const r = this.record
@@ -311,6 +472,7 @@ export class Session {
 			historyLength: r.history.length,
 			digest: r.digest,
 			pendingFacts: clone(r.pendingFacts),
+			narratorMemory: r.narratorMemory ? clone(r.narratorMemory) : null,
 		}
 		await this.storage.pushUndo(r.id, frame)
 
@@ -321,6 +483,7 @@ export class Session {
 
 		const debug: TurnDebug = {
 			rawDelta: meta.rawDelta,
+			...(meta.reasoning ? { reasoning: meta.reasoning } : {}),
 			applied: result.applied,
 			rejected: result.facts
 				.filter((f) => f.kind === "rejection" || f.kind === "limit" || f.kind === "clamp")
@@ -366,6 +529,7 @@ export class Session {
 		r.history = r.history.slice(0, frame.historyLength)
 		r.digest = frame.digest
 		r.pendingFacts = frame.pendingFacts
+		r.narratorMemory = frame.narratorMemory ?? null
 		r.updatedAt = this.now()
 		await this.save()
 		return true
@@ -408,5 +572,6 @@ export function createGameRecord(args: {
 		digest: null,
 		pendingFacts: [],
 		lastDelta: null,
+		narratorMemory: null,
 	}
 }

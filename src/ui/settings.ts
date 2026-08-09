@@ -5,7 +5,21 @@
 import { DEFAULT_TRANSCRIBE_MODEL } from "../voice.ts"
 import type { VoicePreference } from "../voice.ts"
 
+/**
+ * Кто ведёт ход. «local» — свой движок в коде: без ключа, без сети, без токенов.
+ * Это значение по умолчанию, потому что игра обязана начинаться с игры,
+ * а не с формы для чужого ключа.
+ */
+export type EngineChoice = "local" | "llm"
+
+/** Как показывать сцену: 2D-вид или чистый текст. */
+export type ViewMode = "2d" | "text"
+
 export type Settings = {
+	engine: EngineChoice
+	view: ViewMode
+	/** Двухфазный ход у модели: сначала дельта, потом проза по применённому состоянию. */
+	twoPhase: boolean
 	baseUrl: string
 	apiKey: string
 	model: string
@@ -24,6 +38,9 @@ export type Settings = {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+	engine: "local",
+	view: "2d",
+	twoPhase: false,
 	baseUrl: "https://api.openai.com/v1",
 	apiKey: "",
 	model: "gpt-4o-mini",
@@ -63,6 +80,16 @@ export function loadSettings(): Settings {
 	try {
 		const parsed = JSON.parse(raw) as Partial<Settings>
 		return {
+			// Старая сохранённая настройка не знала про свой движок. Если ключ уже введён,
+			// уважаем выбор игрока; если нет — играем без ключа.
+			engine:
+				parsed.engine === "llm" || parsed.engine === "local"
+					? parsed.engine
+					: typeof parsed.apiKey === "string" && parsed.apiKey.trim()
+						? "llm"
+						: "local",
+			view: parsed.view === "text" ? "text" : "2d",
+			twoPhase: parsed.twoPhase === true,
 			baseUrl: typeof parsed.baseUrl === "string" ? parsed.baseUrl : DEFAULT_SETTINGS.baseUrl,
 			apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : "",
 			model: typeof parsed.model === "string" ? parsed.model : DEFAULT_SETTINGS.model,
@@ -95,6 +122,8 @@ export function saveSettings(s: Settings): void {
 	ls.setItem(KEY, JSON.stringify(s))
 }
 
+/** Можно ли делать ходы. Со своим движком — всегда можно. */
 export function isConfigured(s: Settings): boolean {
+	if (s.engine === "local") return true
 	return Boolean(s.baseUrl.trim() && s.model.trim() && s.apiKey.trim())
 }

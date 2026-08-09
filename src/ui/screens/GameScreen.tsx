@@ -1,19 +1,23 @@
-// Экран 4. ИГРА. Вся логика хода — в src/session.ts и src/engine.ts.
-// Здесь только: показать ленту, собрать ввод (руками или голосом),
-// показать поток и ошибку по-человечески.
-//
-// Голос СОЗНАТЕЛЬНО не отправляет ход сам: ход необратим и стоит токенов,
-// поэтому распознанный текст всегда падает в поле ввода для правки.
-// Единственное исключение — локальные команды: они без модели и обратимы.
+// Экран игры. Два вида одной и той же партии:
+//   2D — кадр сцены, проза под ним и колода действий: играется одной рукой и без чтения правил;
+//   текст — вся лента, как в терминале, для тех, кому картинка мешает.
+// Логики мира здесь нет: ход считает src/session.ts, числа меняет src/engine.ts.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Notice, Screen } from "../components/Screen.tsx"
+import { ActionDeck } from "../components/ActionDeck.tsx"
 import { CommandBar } from "../components/CommandBar.tsx"
 import { MicButton } from "../components/MicButton.tsx"
 import { StatePanel } from "../components/StatePanel.tsx"
 import { TurnCard } from "../components/TurnCard.tsx"
+import { TuningCard } from "../components/TuningCard.tsx"
+import { Scene2D } from "../scene2d/Scene2D.tsx"
 import { Session, exportFileName, isLocalCommand } from "../../session.ts"
 import { downloadText } from "../download.ts"
 import { openAiCompatible } from "../../llm.ts"
+import { createLocalNarrator, suggestActions } from "../../narrator/index.ts"
+import { normalizeState } from "../../engine.ts"
+import { readTuning, tuningOf } from "../../tuning.ts"
+import type { Tuning } from "../../tuning.ts"
 import { PROMPTS } from "../assets.ts"
 import { isConfigured } from "../settings.ts"
 import type { Settings } from "../settings.ts"
@@ -42,6 +46,7 @@ export function GameScreen(props: {
 	gameId: string
 	storage: Storage
 	settings: Settings
+	onChangeSettings: (next: Settings) => void
 	onBack: () => void | Promise<void>
 	onOpenSettings: () => void
 }) {
@@ -52,11 +57,13 @@ export function GameScreen(props: {
 	const [busy, setBusy] = useState(false)
 	const [streaming, setStreaming] = useState("")
 	const [panelOpen, setPanelOpen] = useState(false)
+	const [rulesOpen, setRulesOpen] = useState(false)
 	const [undoDepth, setUndoDepth] = useState(0)
 	const [listening, setListening] = useState(false)
 	const [interim, setInterim] = useState("")
 	const [decoding, setDecoding] = useState(false)
 	const [voiceError, setVoiceError] = useState<string | null>(null)
+	const [freeText, setFreeText] = useState(false)
 	const feedRef = useRef<HTMLDivElement>(null)
 	const dictationRef = useRef<Dictation | null>(null)
 	const recordingRef = useRef<Recording | null>(null)
@@ -91,6 +98,8 @@ export function GameScreen(props: {
 		[],
 	)
 
+	const local = props.settings.engine === "local"
+
 	const llm = useMemo(
 		() =>
 			openAiCompatible({
@@ -112,16 +121,19 @@ export function GameScreen(props: {
 		],
 	)
 
+	const narrator = useMemo(() => (local ? createLocalNarrator() : null), [local])
+
 	const session = useMemo(() => {
 		if (!record) return null
 		return new Session({
 			record,
 			storage: props.storage,
 			prompts: PROMPTS,
-			llm,
-			modelName: props.settings.model,
+			...(local ? { narrator: narrator ?? undefined } : { llm }),
+			twoPhase: props.settings.twoPhase,
+			modelName: local ? "свой движок" : props.settings.model,
 		})
-	}, [record, props.storage, llm, props.settings.model])
+	}, [record, props.storage, llm, narrator, local, props.settings.model, props.settings.twoPhase])
 
 	useEffect(() => {
 		const el = feedRef.current
@@ -170,7 +182,7 @@ export function GameScreen(props: {
 				setUndoDepth(await props.storage.undoDepth(props.gameId))
 			}
 		},
-		[session, busy, props.storage, props.gameId],
+		[session, busy, props.storage, props.gameId, record?.title],
 	)
 
 	// Состояние не пострадает: сессия коммитит только после целого ответа.
@@ -189,6 +201,7 @@ export function GameScreen(props: {
 				void send(command)
 				return
 			}
+			setFreeText(true)
 			setInput((prev) => appendDictation(prev, text))
 		},
 		[send],
@@ -277,6 +290,17 @@ export function GameScreen(props: {
 		speak(stripForSpeech(last.text), props.settings.voiceLang)
 	}, [tick, busy, record, props.settings.speak, props.settings.voiceLang])
 
+	/** Правила партии меняются на месте: они живут в состоянии, а не в настройках приложения. */
+	const applyTuning = useCallback(
+		async (next: Tuning) => {
+			if (!record) return
+			record.state = normalizeState({ ...record.state, tuning: readTuning(next) })
+			await props.storage.saveGame(record)
+			setTick((t) => t + 1)
+		},
+		[record, props.storage],
+	)
+
 	if (loadError && !record) {
 		return (
 			<Screen title="Игра" onBack={() => void props.onBack()}>
@@ -295,6 +319,82 @@ export function GameScreen(props: {
 
 	const s = record.state
 	const ready = isConfigured(props.settings)
+	const twoD = props.settings.view === "2d"
+	const lastProse = [...record.transcript].reverse().find((e) => e.kind === "prose")
+	const lastSystem = record.transcript[record.transcript.length - 1]
+	const actions = suggestActions(s)
+
+	const composer = (
+		<div className="composer">
+			{/* Колода живёт в подвале нарочно: до действия должно быть можно дотянуться
+			    пальцем, не прокручивая прозу. На узком экране это ряд карт, на широком — сетка. */}
+			{twoD && !s.dead ? (
+				<ActionDeck actions={actions} disabled={busy} onPick={(text) => void send(text)} />
+			) : null}
+			{listening || interim ? (
+				<div className="interim" aria-live="polite">
+					{interim || (voiceMode === "web" ? "слушаю…" : "записываю… нажмите ■, когда закончите")}
+				</div>
+			) : null}
+			{twoD && !freeText ? (
+				<div className="line">
+					<MicButton
+						listening={listening}
+						busy={decoding}
+						disabled={busy || decoding || s.dead || voiceMode === "off"}
+						hint={voiceModeExplanation(props.settings.voice, caps)}
+						onClick={() => void (listening ? stopVoice() : startVoice())}
+					/>
+					<button
+						type="button"
+						className="ghost grow"
+						disabled={busy || s.dead}
+						onClick={() => setFreeText(true)}
+					>
+						Сказать своими словами
+					</button>
+				</div>
+			) : (
+				<div className="line">
+					<MicButton
+						listening={listening}
+						busy={decoding}
+						disabled={busy || decoding || s.dead || voiceMode === "off"}
+						hint={voiceModeExplanation(props.settings.voice, caps)}
+						onClick={() => void (listening ? stopVoice() : startVoice())}
+					/>
+					<textarea
+						rows={2}
+						value={input}
+						placeholder={s.dead ? "Персонаж мёртв. Нужна новая партия." : "Что вы делаете?"}
+						disabled={busy || s.dead}
+						onChange={(e) => setInput(e.target.value)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter" && !e.shiftKey) {
+								e.preventDefault()
+								void send(input)
+							}
+						}}
+					/>
+					{busy ? (
+						<button type="button" className="send stop" onClick={stopTurn}>
+							Стоп
+						</button>
+					) : (
+						<button
+							type="button"
+							className="primary send"
+							disabled={s.dead || !input.trim()}
+							onClick={() => void send(input)}
+						>
+							Ход
+						</button>
+					)}
+				</div>
+			)}
+			<CommandBar undoDepth={undoDepth} disabled={busy} onCommand={(text) => void send(text)} />
+		</div>
+	)
 
 	return (
 		<Screen
@@ -302,69 +402,37 @@ export function GameScreen(props: {
 			subtitle={`ход ${s.clock.turn} · день ${s.clock.day}${s.dead ? " · персонаж мёртв" : ""}`}
 			onBack={() => void props.onBack()}
 			action={
-				<button type="button" className="ghost small" onClick={props.onOpenSettings}>
-					Настройки
-				</button>
-			}
-			footer={
-				<div className="composer">
-					<CommandBar
-						undoDepth={undoDepth}
-						disabled={busy}
-						onCommand={(text) => void send(text)}
-					/>
-					{listening || interim ? (
-						<div className="interim" aria-live="polite">
-							{interim || (voiceMode === "web" ? "слушаю…" : "записываю… нажмите ■, когда закончите")}
-						</div>
-					) : null}
-					<div className="line">
-						<MicButton
-							listening={listening}
-							busy={decoding}
-							disabled={busy || decoding || s.dead || voiceMode === "off"}
-							hint={voiceModeExplanation(props.settings.voice, caps)}
-							onClick={() => void (listening ? stopVoice() : startVoice())}
-						/>
-						<textarea
-							rows={2}
-							value={input}
-							placeholder={s.dead ? "Персонаж мёртв. Нужна новая партия." : "Что вы делаете?"}
-							disabled={busy || s.dead}
-							onChange={(e) => setInput(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter" && !e.shiftKey) {
-									e.preventDefault()
-									void send(input)
-								}
-							}}
-						/>
-						{busy ? (
-							<button type="button" className="send stop" onClick={stopTurn}>
-								Стоп
-							</button>
-						) : (
-							<button
-								type="button"
-								className="primary send"
-								disabled={s.dead || !input.trim()}
-								onClick={() => void send(input)}
-							>
-								Ход
-							</button>
-						)}
-					</div>
+				<div className="row">
+					<button
+						type="button"
+						className="ghost small"
+						aria-pressed={twoD}
+						title="Переключить вид"
+						onClick={() =>
+							props.onChangeSettings({ ...props.settings, view: twoD ? "text" : "2d" })
+						}
+					>
+						{twoD ? "Текст" : "2D"}
+					</button>
+					<button type="button" className="ghost small" onClick={props.onOpenSettings}>
+						Настройки
+					</button>
 				</div>
 			}
+			footer={composer}
 		>
 			<StatePanel state={s} open={panelOpen} onToggle={() => setPanelOpen((v) => !v)} />
 
 			{!ready ? (
 				<Notice kind="bad">
-					Не задан ключ или модель. Локальные команды (снапшот, аудит, лог, цены, откат, экспорт) работают
-					без модели, ходы — нет.{" "}
-					<button type="button" className="ghost small" onClick={props.onOpenSettings}>
-						Открыть настройки
+					Модель выбрана, но ключ или имя не заданы. Можно вернуться к своему движку — он играет без
+					ключа.{" "}
+					<button
+						type="button"
+						className="ghost small"
+						onClick={() => props.onChangeSettings({ ...props.settings, engine: "local" })}
+					>
+						Играть без ключа
 					</button>
 				</Notice>
 			) : null}
@@ -378,28 +446,74 @@ export function GameScreen(props: {
 				</Notice>
 			) : null}
 
-			<div className="feed" ref={feedRef}>
-				{record.transcript.length === 0 ? (
-					<div className="card muted">
-						Мир готов. Напишите или надиктуйте первое действие — например, где вы проснулись и что
-						делаете первым делом.
-					</div>
-				) : null}
+			{twoD ? (
+				<div className="play">
+					<Scene2D
+						state={s}
+						busy={busy}
+						onPickPerson={(name) => void send(`поговорить с ${name}`)}
+					/>
 
-				{record.transcript.map((e) => (
-					<TurnCard key={e.id} entry={e} debug={props.settings.debug} />
-				))}
-
-				{busy ? (
-					<article className="turn-prose">
-						{streaming ? <p>{streaming}</p> : null}
-						<div className="row muted">
-							<span className="spinner" aria-hidden="true" />
-							{streaming ? "модель пишет…" : "ждём ответ…"}
-						</div>
+					<article className="scene-prose" aria-live="polite">
+						{busy ? (
+							<>
+								{streaming ? <p>{streaming}</p> : null}
+								<div className="row muted">
+									<span className="spinner" aria-hidden="true" />
+									{local ? "движок собирает сцену…" : streaming ? "модель пишет…" : "ждём ответ…"}
+								</div>
+							</>
+						) : lastProse ? (
+							lastProse.text.split(/\n{2,}/).map((para, i) => (
+								<p key={i} style={{ ["--i" as string]: String(i) }}>
+									{para}
+								</p>
+							))
+						) : (
+							<p>
+								Мир готов. Выберите действие ниже — или скажите своими словами, что вы делаете.
+							</p>
+						)}
+						{!busy && lastSystem && lastSystem.kind === "system" ? (
+							<pre className="turn-system">{lastSystem.text}</pre>
+						) : null}
 					</article>
-				) : null}
-			</div>
+
+					{s.dead ? (
+						<Notice kind="bad">Эта жизнь кончилась. Начните новую партию — мир останется прежним.</Notice>
+					) : null}
+
+					<details className="rules" open={rulesOpen}>
+						<summary onClick={() => setRulesOpen((v) => !v)}>Правила партии и подробности</summary>
+						<div className="rules-body">
+							<TuningCard value={tuningOf(s)} onChange={(next) => void applyTuning(next)} openKnobs />
+						</div>
+					</details>
+				</div>
+			) : (
+				<div className="feed" ref={feedRef}>
+					{record.transcript.length === 0 ? (
+						<div className="card muted">
+							Мир готов. Напишите или надиктуйте первое действие — например, где вы проснулись и что
+							делаете первым делом.
+						</div>
+					) : null}
+
+					{record.transcript.map((e) => (
+						<TurnCard key={e.id} entry={e} debug={props.settings.debug} />
+					))}
+
+					{busy ? (
+						<article className="turn-prose">
+							{streaming ? <p>{streaming}</p> : null}
+							<div className="row muted">
+								<span className="spinner" aria-hidden="true" />
+								{streaming ? "рассказчик пишет…" : "ждём ответ…"}
+							</div>
+						</article>
+					) : null}
+				</div>
+			)}
 		</Screen>
 	)
 }

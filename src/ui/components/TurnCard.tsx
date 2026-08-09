@@ -3,8 +3,19 @@ import type { TranscriptEntry } from "../../storage/types.ts"
 
 function usageLine(d: NonNullable<TranscriptEntry["debug"]>): string {
 	const u = d.usage
-	const tokens = u ? `${u.total} токенов (вход ${u.prompt}, выход ${u.completion})` : "токены не сообщены"
-	const mode = d.mode === "json_schema" ? "structured output" : "разбор <delta>"
+	const tokens = u
+		? `${u.total} токенов (вход ${u.prompt}, выход ${u.completion})`
+		: d.mode === "local"
+			? "токенов не потрачено"
+			: "токены не сообщены"
+	const mode =
+		d.mode === "local"
+			? "свой движок"
+			: d.mode === "two-phase"
+				? "двухфазный ход"
+				: d.mode === "json_schema"
+					? "structured output"
+					: "разбор <delta>"
 	return `${tokens} · ${mode} · ${d.model || "модель не указана"} · ${Math.round(d.ms)} мс · сообщений в контексте: ${d.contextMessages}${d.retried ? " · был ретрай разбора" : ""}`
 }
 
@@ -30,6 +41,13 @@ export function TurnCard(props: { entry: TranscriptEntry; debug: boolean }) {
 				<details className="debug">
 					<summary>Отладка хода {e.turn}</summary>
 					<div className="muted">{usageLine(debug)}</div>
+
+				{debug.reasoning ? (
+					<>
+						<h5>Почему так вышло</h5>
+						<div className="why">{debug.reasoning}</div>
+					</>
+				) : null}
 
 					<h5>Сырая дельта</h5>
 					<pre>{debug.rawDelta ?? "дельта не пришла"}</pre>
