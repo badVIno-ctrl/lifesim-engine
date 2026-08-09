@@ -57,7 +57,6 @@ export function GameScreen(props: {
 	const [busy, setBusy] = useState(false)
 	const [streaming, setStreaming] = useState("")
 	const [panelOpen, setPanelOpen] = useState(false)
-	const [rulesOpen, setRulesOpen] = useState(false)
 	const [undoDepth, setUndoDepth] = useState(0)
 	const [listening, setListening] = useState(false)
 	const [interim, setInterim] = useState("")
@@ -483,8 +482,10 @@ export function GameScreen(props: {
 						<Notice kind="bad">Эта жизнь кончилась. Начните новую партию — мир останется прежним.</Notice>
 					) : null}
 
-					<details className="rules" open={rulesOpen}>
-						<summary onClick={() => setRulesOpen((v) => !v)}>Правила партии и подробности</summary>
+					{/* Неуправляемый details нарочно: свой open плюс нативный переключатель
+					    спорят друг с другом, и блок закрывается сам после любого клика внутри. */}
+					<details className="rules">
+						<summary>Правила партии и подробности</summary>
 						<div className="rules-body">
 							<TuningCard value={tuningOf(s)} onChange={(next) => void applyTuning(next)} openKnobs />
 						</div>
