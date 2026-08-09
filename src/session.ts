@@ -20,6 +20,7 @@ import {
 import { LlmError } from "./llm.ts"
 import type { LlmCallOptions, LlmCaller, LlmMessage } from "./llm.ts"
 import type { Narrator } from "./narrator/index.ts"
+import type { NarratorMemory } from "./narrator/plan.ts"
 import { EPILOGUE_COMMAND } from "./narrator/index.ts"
 import type { Delta, EngineFact, State } from "./types.ts"
 import type { GameRecord, Storage, TranscriptEntry, TurnDebug, UndoFrame } from "./storage/types.ts"
@@ -427,8 +428,11 @@ export class Session {
 		}
 		// Поток нужен интерфейсу, а не движку: сцена уже готова целиком.
 		opts.onToken?.(out.prose)
-		r.narratorMemory = out.memory
+		// Память рассказчика записывается внутри commit, после кадра отката:
+		// иначе откат вернул бы состояние, но не вернул бы память, и рассказчик
+		// повторил бы уже сказанное другими словами.
 		return this.commit(input, out.prose, out.delta, {
+			narratorMemory: out.memory,
 			rawDelta: JSON.stringify(out.delta),
 			usage: null,
 			mode: "local",
@@ -461,6 +465,7 @@ export class Session {
 			retried: boolean
 			directives: string[]
 			reasoning?: string
+			narratorMemory?: NarratorMemory
 		},
 	): Promise<TurnOutcome> {
 		const r = this.record
@@ -475,6 +480,7 @@ export class Session {
 			narratorMemory: r.narratorMemory ? clone(r.narratorMemory) : null,
 		}
 		await this.storage.pushUndo(r.id, frame)
+		if (meta.narratorMemory) r.narratorMemory = meta.narratorMemory
 
 		const playerEntry = this.entry("player", playerInput)
 		const result = applyDelta(r.state, delta ?? {})

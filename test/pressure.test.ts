@@ -5,6 +5,9 @@ import assert from "node:assert/strict"
 import { applyDelta, calendarPressure, directiveKey, normalizeState, overdueStageFor } from "../src/engine.ts"
 import { presetById, pressureProfile } from "../src/tuning.ts"
 import type { Delta, State } from "../src/types.ts"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+import { PROJECT_ROOT } from "../src/node/assets.ts"
 import { base, factText, hasCode } from "./helpers.ts"
 
 const tick = (s: State, extra: Delta = {}): State =>
@@ -272,4 +275,52 @@ test("контакт обновляет и день, и ход", () => {
 	const npc = r.state.npcs.find((n) => n.name === s.npcs[0].name)!
 	assert.equal(npc.lastContactDay, 10)
 	assert.equal(npc.lastContactTurn, r.state.clock.turn)
+})
+
+/* ─────────── Архитектура: у движка одна точка входа ─────────── */
+
+test("разделы движка разбиты, но менять состояние по-прежнему может только applyDelta", async () => {
+	const engine = (await import("../src/engine.ts")) as Record<string, unknown>
+	const exported = Object.keys(engine).sort()
+	// Разделы состояния — внутренние функции. Наружу торчит одна дверь.
+	for (const hidden of [
+		"applyClock",
+		"applyScene",
+		"applyBody",
+		"applyPurse",
+		"applyPeople",
+		"applyGrowth",
+		"applyWorld",
+		"applyTerminal",
+		"escalateOverdue",
+		"syncDirectiveLog",
+	]) {
+		assert.equal(exported.includes(hidden), false, `${hidden} не должен быть публичным`)
+	}
+	assert.ok(exported.includes("applyDelta"))
+
+	const source = readFileSync(join(PROJECT_ROOT, "src/engine.ts"), "utf8")
+	// Каждый раздел существует и вызывается ровно из точки входа.
+	for (const section of ["applyClock", "applyBody", "applyPurse", "applyPeople", "applyWorld"]) {
+		assert.equal(
+			(source.match(new RegExp(`${section}\\(t\\)`, "g")) ?? []).length,
+			1,
+			`${section} вызывается один раз`,
+		)
+	}
+})
+
+test("applyDelta не мутирует вход даже после разбиения на разделы", () => {
+	const s = withPreset("harsh")
+	s.obligations = [{ what: "долг", dueDay: 1 }]
+	s.clock.day = 9
+	const snapshot = JSON.stringify(s)
+	applyDelta(s, {
+		time: { minutes: 30 },
+		channel: "звук",
+		money: { delta: -5, reason: "проверка" },
+		npc: [{ name: s.npcs[0].name, attitudeStep: 1, reason: "проверка" }],
+		unknowns: { add: ["проверка"] },
+	})
+	assert.equal(JSON.stringify(s), snapshot)
 })

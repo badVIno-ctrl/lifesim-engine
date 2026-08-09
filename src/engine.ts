@@ -281,6 +281,24 @@ function overdueInstruction(stage: number): string {
  * Единственная точка изменения состояния. Детерминирована, чиста, тестируема.
  * Модель предлагает изменения — движок решает, какие допустимы.
  */
+/**
+ * Ход в работе: состояние, дельта, правила партии и способы сообщить о решении.
+ * Разделы движка получают именно это и ничего больше — ни сети, ни хранилища,
+ * ни рассказчика. Точка входа по-прежнему одна: applyDelta.
+ */
+type Turn = {
+	s: State
+	delta: Delta
+	tuning: Tuning
+	profile: PressureProfile
+	/** Что применилось — построчно, для микро-лога и панели отладки. */
+	parts: string[]
+	fact: (kind: EngineFactKind, code: string, text: string, forModel: boolean) => void
+	reject: (code: string, text: string) => void
+	limit: (code: string, text: string) => void
+	clamp: (code: string, text: string) => void
+}
+
 export function applyDelta(prev: State, delta: Delta): ApplyResult {
 	const s = clone(prev)
 	const facts: EngineFact[] = []
@@ -313,6 +331,48 @@ export function applyDelta(prev: State, delta: Delta): ApplyResult {
 		}
 	}
 
+	const t: Turn = { s, delta, tuning, profile, parts, fact, reject, limit, clamp }
+
+	// Разделы состояния идут по порядку: время задаёт остальным контекст,
+	// тело зависит от времени, карман от тела, мир от всего вместе.
+	applyClock(t)
+	applyScene(t)
+	applyBody(t)
+	applyPurse(t)
+	applyPeople(t)
+	applyGrowth(t)
+	const due = applyWorld(t)
+	applyTerminal(t)
+
+	// --- D. Эскалация просрочки: косвенный сигнал → угроза → мир действует сам ---
+	escalateOverdue(s, profile, fact, parts)
+
+	// --- Журнал директив: выдано, отработано, снято ---
+	syncDirectiveLog(s, prev, issued, delta, profile, fact, parts)
+
+	if (delta.channel) parts.push(`канал: ${delta.channel}`)
+	const microLog = `[${parts.join(" | ")}]`
+	s.ledger.push({ turn: s.clock.turn, text: microLog })
+	const rejected = facts.filter((f) => f.kind === "rejection" || f.kind === "limit")
+	if (rejected.length) {
+		s.ledger.push({ turn: s.clock.turn, text: `⚠ ${rejected.map((f) => f.text).join("; ")}` })
+	}
+	s.ledger = s.ledger.slice(-200)
+
+	return {
+		state: s,
+		facts,
+		warnings: facts.map((f) => f.text),
+		applied: parts,
+		microLog,
+		due,
+	}
+}
+
+
+/** Время — единственный ресурс, который тратится всегда. */
+function applyClock(t: Turn): void {
+	const { s, delta, parts, limit } = t
 	// --- время ---
 	s.clock.turn += 1
 	const mins = delta.time?.minutes ?? (delta.time?.days ? delta.time.days * 1440 : 0)
@@ -331,6 +391,11 @@ export function applyDelta(prev: State, delta: Delta): ApplyResult {
 		`день ${s.clock.day}, ${phaseOf(s.clock.minuteOfDay)}${mins ? ` +${humanMinutes(mins)}` : ""}`,
 	)
 
+}
+
+/** Где стоим и каким чувством смотрим. */
+function applyScene(t: Turn): void {
+	const { s, delta, limit, clamp } = t
 	// --- сцена ---
 	if (delta.scene) Object.assign(s.scene, delta.scene)
 
@@ -346,6 +411,11 @@ export function applyDelta(prev: State, delta: Delta): ApplyResult {
 		clamp("no_channel", "дельта без channel")
 	}
 
+}
+
+/** Тело: стресс, силы, раны, кровь. Здесь живёт правило одной ступени. */
+function applyBody(t: Turn): void {
+	const { s, delta, parts, clamp } = t
 	// --- стресс ---
 	if (delta.stress?.segments) {
 		const before = `${LADDERS.stress[s.condition.stress.level]}`
@@ -400,6 +470,11 @@ export function applyDelta(prev: State, delta: Delta): ApplyResult {
 		parts.push(`кровопотеря: ${LADDERS.bleed[s.condition.bleed]}`)
 	}
 
+}
+
+/** Карман: деньги и вещи. Арифметика всегда в коде, никогда в тексте. */
+function applyPurse(t: Turn): void {
+	const { s, delta, parts, reject, clamp } = t
 	// --- деньги: арифметика всегда в коде ---
 	if (delta.money?.delta) {
 		const before = s.money
@@ -447,6 +522,11 @@ export function applyDelta(prev: State, delta: Delta): ApplyResult {
 		parts.push(`${it.name}: ${LADDERS.object[ex.wear]}`)
 	}
 
+}
+
+/** Люди: отношение меняется только с причиной, остывает по дням. */
+function applyPeople(t: Turn): void {
+	const { s, delta, parts, tuning, fact, clamp } = t
 	// --- NPC ---
 	for (const n of delta.npc ?? []) {
 		let npc = s.npcs.find((x) => x.name === n.name)
@@ -487,6 +567,11 @@ export function applyDelta(prev: State, delta: Delta): ApplyResult {
 		}
 	}
 
+}
+
+/** Рост и переломы: навыки, вехи, перелом, временные состояния. */
+function applyGrowth(t: Turn): void {
+	const { s, delta, parts, fact, reject, limit, clamp } = t
 	// --- навыки ---
 	for (const sk of delta.skills ?? []) {
 		const ex = s.skills.find((x) => x.name === sk.name)
@@ -564,6 +649,11 @@ export function applyDelta(prev: State, delta: Delta): ApplyResult {
 		fact("event", "effects_expired", `истекли эффекты: ${expired.map((e) => e.name).join(", ")}`, true)
 	}
 
+}
+
+/** Мир: крючки, последствия, фронты, сроки, реестр неустановленного. */
+function applyWorld(t: Turn): ApplyResult["due"] {
+	const { s, delta, parts, reject, limit } = t
 	// --- крючки ---
 	for (const h of delta.hooks?.add ?? []) {
 		s.hooks.push({ text: h.text, sownTurn: s.clock.turn, window: h.window ?? 10 })
@@ -684,6 +774,17 @@ export function applyDelta(prev: State, delta: Delta): ApplyResult {
 		parts.push(`след: ${delta.trace}`)
 	}
 
+	return {
+		consequences: dueConsequences,
+		hooksExpiring,
+		frontsReady,
+		obligations: dueObligations,
+	}
+}
+
+/** Конец: смерть или шрам — по правилу партии. */
+function applyTerminal(t: Turn): void {
+	const { s, delta, parts, tuning, fact, reject } = t
 	// --- терминальное состояние — только при установленной причине ---
 	if (delta.terminal) {
 		const lethalCause =
@@ -716,34 +817,6 @@ export function applyDelta(prev: State, delta: Delta): ApplyResult {
 		}
 	}
 
-	// --- D. Эскалация просрочки: косвенный сигнал → угроза → мир действует сам ---
-	escalateOverdue(s, profile, fact, parts)
-
-	// --- Журнал директив: выдано, отработано, снято ---
-	syncDirectiveLog(s, prev, issued, delta, profile, fact, parts)
-
-	if (delta.channel) parts.push(`канал: ${delta.channel}`)
-	const microLog = `[${parts.join(" | ")}]`
-	s.ledger.push({ turn: s.clock.turn, text: microLog })
-	const rejected = facts.filter((f) => f.kind === "rejection" || f.kind === "limit")
-	if (rejected.length) {
-		s.ledger.push({ turn: s.clock.turn, text: `⚠ ${rejected.map((f) => f.text).join("; ")}` })
-	}
-	s.ledger = s.ledger.slice(-200)
-
-	return {
-		state: s,
-		facts,
-		warnings: facts.map((f) => f.text),
-		applied: parts,
-		microLog,
-		due: {
-			consequences: dueConsequences,
-			hooksExpiring,
-			frontsReady,
-			obligations: dueObligations,
-		},
-	}
 }
 
 function applyStress(s: State, segments: number, clamp: (code: string, text: string) => void): void {
