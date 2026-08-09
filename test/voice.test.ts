@@ -160,6 +160,9 @@ test("прокси провозит бинарное тело байт в бай
 				},
 				body: raw,
 			}),
+			// Тестовый адрес разрешается явно — ровно так, как это делает игрок
+			// с собственным эндпоинтом: переменной, а не правкой кода.
+			{ LLM_ALLOWED_HOSTS: "api.example.com" },
 		)
 		assert.equal(res.status, 200)
 		assert.equal(upstreamUrl, "https://api.example.com/v1/audio/transcriptions")

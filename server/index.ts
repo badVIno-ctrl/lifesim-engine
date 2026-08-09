@@ -52,8 +52,10 @@ if (!existsSync(join(dist, "index.html"))) {
 
 const app = new Hono()
 
-app.all(`${LLM_PROXY_PREFIX}/*`, (c) => llmProxyFetch(c.req.raw))
-app.all(LLM_PROXY_PREFIX, (c) => llmProxyFetch(c.req.raw))
+const guardEnv = { LLM_ALLOWED_HOSTS: env.LLM_ALLOWED_HOSTS, LLM_LOCAL_ONLY: env.LLM_LOCAL_ONLY }
+
+app.all(`${LLM_PROXY_PREFIX}/*`, (c) => llmProxyFetch(c.req.raw, guardEnv))
+app.all(LLM_PROXY_PREFIX, (c) => llmProxyFetch(c.req.raw, guardEnv))
 
 app.get("*", (c) => {
 	const pathname = decodeURIComponent(new URL(c.req.url).pathname)
@@ -68,6 +70,13 @@ app.get("*", (c) => {
 })
 
 const port = Number(env.PORT ?? 5173)
-serve({ fetch: app.fetch, port }, (info) => {
-	stdout.write(`Игра поднята: http://localhost:${info.port}\n`)
+// По умолчанию слушаем только свою машину. Чтобы позвать игроков из локальной сети,
+// это нужно сказать явно: HOST=0.0.0.0. Тогда белый список прокси — единственная защита,
+// и он включён всегда.
+const hostname = env.HOST ?? "127.0.0.1"
+serve({ fetch: app.fetch, port, hostname }, (info) => {
+	stdout.write(`Игра поднята: http://${hostname === "0.0.0.0" ? "localhost" : hostname}:${info.port}\n`)
+	if (hostname === "0.0.0.0") {
+		stdout.write("Внимание: сервер открыт для локальной сети. Прокси ходит только по белому списку.\n")
+	}
 })

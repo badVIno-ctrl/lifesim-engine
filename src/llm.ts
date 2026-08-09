@@ -81,6 +81,7 @@ function humanHttpError(status: number, body: string): string {
 function looksLikeSchemaRefusal(status: number, body: string): boolean {
 	if (status !== 400 && status !== 404 && status !== 422 && status !== 501) return false
 	const b = body.toLowerCase()
+	if (looksLikeTemperatureRefusal(status, body)) return false
 	return (
 		b.includes("response_format") ||
 		b.includes("json_schema") ||
@@ -89,9 +90,34 @@ function looksLikeSchemaRefusal(status: number, body: string): boolean {
 	)
 }
 
-/** Собирает вызывателя модели. Состояние «эндпоинт не умеет схему» запоминается в замыкании. */
+/**
+ * Reasoning-модели (o-серия и родня) отказываются от `temperature` целиком:
+ * не «игнорирую», а 400 с текстом про неподдерживаемый параметр.
+ * Признак узкий: в ответе назван сам параметр. Иначе мы бы снимали температуру
+ * на любой ошибке и молча меняли поведение обычных моделей.
+ */
+export function looksLikeTemperatureRefusal(status: number, body: string): boolean {
+	if (status !== 400 && status !== 422) return false
+	const b = body.toLowerCase()
+	if (!b.includes("temperature")) return false
+	return (
+		b.includes("unsupported") ||
+		b.includes("not support") ||
+		b.includes("does not support") ||
+		b.includes("only the default") ||
+		b.includes("invalid") ||
+		b.includes("unexpected")
+	)
+}
+
+/**
+ * Собирает вызывателя модели. Два факта об эндпоинте запоминаются в замыкании и
+ * больше не проверяются: «не умеет схему» и «не принимает температуру».
+ * Оба выясняются одним автоматическим повтором, а не настройкой в интерфейсе.
+ */
 export function openAiCompatible(cfg: LlmConfig): LlmCaller {
 	let structuredSupported = cfg.structured !== false
+	let temperatureSupported = true
 
 	return async function call(messages: LlmMessage[], opts: LlmCallOptions = {}): Promise<LlmResult> {
 		const doFetch = opts.fetchImpl ?? globalThis.fetch
@@ -101,12 +127,9 @@ export function openAiCompatible(cfg: LlmConfig): LlmCaller {
 
 		const wantStream = cfg.stream !== false && typeof opts.onToken === "function"
 
-		const build = (withSchema: boolean): Record<string, unknown> => {
-			const body: Record<string, unknown> = {
-				model: cfg.model,
-				temperature: cfg.temperature,
-				messages,
-			}
+		const build = (withSchema: boolean, withTemperature: boolean): Record<string, unknown> => {
+			const body: Record<string, unknown> = { model: cfg.model, messages }
+			if (withTemperature) body.temperature = cfg.temperature
 			if (wantStream) {
 				body.stream = true
 				body.stream_options = { include_usage: true }
@@ -120,13 +143,13 @@ export function openAiCompatible(cfg: LlmConfig): LlmCaller {
 			return body
 		}
 
-		const send = async (withSchema: boolean): Promise<LlmResult> => {
+		const send = async (withSchema: boolean, withTemperature: boolean): Promise<LlmResult> => {
 			let res: Response
 			try {
 				res = await doFetch(endpoint(cfg, "/chat/completions"), {
 					method: "POST",
 					headers: headers(cfg),
-					body: JSON.stringify(build(withSchema)),
+					body: JSON.stringify(build(withSchema, withTemperature)),
 					signal: opts.signal,
 				})
 			} catch (e) {
@@ -137,9 +160,14 @@ export function openAiCompatible(cfg: LlmConfig): LlmCaller {
 
 			if (!res.ok) {
 				const body = await safeText(res)
+				// Один повтор на одну причину: спорный параметр снимается, ход не теряется.
+				if (withTemperature && looksLikeTemperatureRefusal(res.status, body)) {
+					temperatureSupported = false
+					return send(withSchema, false)
+				}
 				if (withSchema && looksLikeSchemaRefusal(res.status, body)) {
 					structuredSupported = false
-					return send(false)
+					return send(false, withTemperature)
 				}
 				throw new LlmError(humanHttpError(res.status, body), res.status, body)
 			}
@@ -163,7 +191,7 @@ export function openAiCompatible(cfg: LlmConfig): LlmCaller {
 			return result
 		}
 
-		return send(structuredSupported)
+		return send(structuredSupported, temperatureSupported)
 	}
 }
 

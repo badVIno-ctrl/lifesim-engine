@@ -47,12 +47,14 @@ export default defineConfig({
 	],
 	server: {
 		port: 5173,
-		host: true,
+		// Слушать все интерфейсы — это осознанное решение, а не значение по умолчанию:
+		// вместе с прокси к LLM это открывает вашу машину всей локальной сети.
+		host: process.env.HOST ?? "localhost",
 		open: false,
 	},
 	preview: {
 		port: 5173,
-		host: true,
+		host: process.env.HOST ?? "localhost",
 	},
 	build: {
 		target: "es2022",
