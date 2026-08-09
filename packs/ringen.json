@@ -1,5 +1,12 @@
 {
 	"version": "13.1",
+	"tuning": {
+		"worldPressure": 3,
+		"sceneLength": "средняя",
+		"deathRule": "смерть",
+		"bondCoolDays": 6,
+		"unknownsPatience": 10
+	},
 	"meta": {
 		"character": "Анна Керш, 24, писарь на таможне",
 		"setting": "Порт Ринген, 1928, сезон штормов",

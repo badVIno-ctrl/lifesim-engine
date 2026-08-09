@@ -8,8 +8,11 @@ import type { InitAnswers } from "../../init.ts"
 import { packById } from "../assets.ts"
 import type { State } from "../../types.ts"
 
+import type { Tuning } from "../../tuning.ts"
+
 export function InitWizard(props: {
 	packId: string
+	tuning: Tuning
 	onBack: () => void
 	onDone: (state: State) => void | Promise<void>
 }) {
@@ -34,7 +37,7 @@ export function InitWizard(props: {
 
 	const finish = async (final: InitAnswers) => {
 		try {
-			const state = buildStateFromAnswers(pack, final)
+			const state = buildStateFromAnswers(pack, final, props.tuning)
 			await props.onDone(state)
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e))

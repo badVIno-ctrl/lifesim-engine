@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { normalizeState } from "../src/engine.ts"
 import { PROJECT_ROOT } from "../src/node/assets.ts"
-import type { EngineFact, State } from "../src/types.ts"
+import type { State } from "../src/types.ts"
 import type { LlmCaller, LlmResult } from "../src/llm.ts"
 
 /** Стартовое состояние из state.example.json. Свежая копия на каждый вызов. */
@@ -16,10 +16,12 @@ export function base(): State {
 export const firstFront = (): string => base().fronts[0].name
 export const firstNpc = (): string => base().npcs[0].name
 
-export const codes = (facts: EngineFact[]): string[] => facts.map((f) => f.code)
-export const hasCode = (facts: EngineFact[], code: string): boolean =>
-	facts.some((f) => f.code === code)
-export const factText = (facts: EngineFact[], code: string): string =>
+/** И факты движка, и директивы календаря опознаются одинаково: по коду. */
+type Coded = { code: string; text: string }
+
+export const codes = (facts: Coded[]): string[] => facts.map((f) => f.code)
+export const hasCode = (facts: Coded[], code: string): boolean => facts.some((f) => f.code === code)
+export const factText = (facts: Coded[], code: string): string =>
 	facts.find((f) => f.code === code)?.text ?? ""
 
 /** Временный каталог для файлового хранилища. */

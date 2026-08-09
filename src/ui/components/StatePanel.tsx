@@ -3,9 +3,17 @@
 import type { ReactNode } from "react"
 import { Bar } from "./Bar.tsx"
 import { LADDERS, clockLabel, phaseOf } from "../../ladders.ts"
+import { labelOf, labelTitle, tuningOf } from "../../tuning.ts"
 import type { State } from "../../types.ts"
 
 const STRESS_SEGMENTS = 5
+
+/** Ступени эскалации просрочки — теми же словами, что и в движке. */
+const STAGE_TAG: Record<number, string> = {
+	1: "мир заметил",
+	2: "требуют вслух",
+	3: "мир действует сам",
+}
 const FRONT_STEPS = 5
 
 function rung(ladder: readonly string[], index: number): string {
@@ -88,6 +96,14 @@ export function StatePanel(props: { state: State; open: boolean; onToggle: () =>
 						/>
 					</Group>
 
+					{s.scars.length > 0 ? (
+						<Group title="Необратимое" count={s.scars.length}>
+							{s.scars.map((x) => (
+								<Kv key={`${x.turn}:${x.what}`} k={x.what} v={`день ${x.day} · ${x.cause}`} />
+							))}
+						</Group>
+					) : null}
+
 					<Group title="Раны" count={c.wounds.length}>
 						{c.wounds.length === 0 ? (
 							<Empty>цел</Empty>
@@ -157,6 +173,11 @@ export function StatePanel(props: { state: State; open: boolean; onToggle: () =>
 														: dueToday(o.dueDay)
 															? "сегодня"
 															: `до дня ${o.dueDay}`}
+												</span>
+											) : null}
+											{(o.stage ?? 0) > 0 ? (
+												<span className={(o.stage ?? 0) >= 3 ? "tag bad" : "tag warn"}>
+													{STAGE_TAG[o.stage ?? 0]}
 												</span>
 											) : null}
 										</>
@@ -281,6 +302,7 @@ export function StatePanel(props: { state: State; open: boolean; onToggle: () =>
 							v={`${s.constants.str} · ${s.constants.dex} · ${s.constants.int} · ${s.constants.cha} · ${s.constants.wil}`}
 						/>
 						<Kv k="Жёсткость мира" v={s.meta.worldLevel} />
+						<Kv k="Правила партии" v={labelTitle(labelOf(tuningOf(s)))} />
 						<Kv k="Вехи" v={`${s.milestones}/5`} />
 					</Group>
 				</div>

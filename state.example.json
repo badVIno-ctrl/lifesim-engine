@@ -1,5 +1,12 @@
 {
 	"version": "13.1",
+	"tuning": {
+		"worldPressure": 3,
+		"sceneLength": "средняя",
+		"deathRule": "смерть",
+		"bondCoolDays": 6,
+		"unknownsPatience": 10
+	},
 	"meta": {
 		"character": "Мартин Вейс, 31, бывший армейский слесарь",
 		"setting": "Пограничный городок Грауберг, позднее Средневековье без магии",

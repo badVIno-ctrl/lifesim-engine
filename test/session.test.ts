@@ -67,8 +67,9 @@ test("H: раз в 7 ходов движок сам делает снапшот 
 	assert.equal(session.record.digest, null)
 	for (let i = 0; i < SNAPSHOT_EVERY; i++) await session.turn(`ход ${i}`)
 	assert.equal(session.state.clock.turn, SNAPSHOT_EVERY)
-	assert.ok(session.record.digest)
-	assert.ok(session.record.digest!.includes("СНАПШОТ"))
+	const digest = session.record.digest
+	assert.ok(digest)
+	assert.ok(String(digest).includes("СНАПШОТ"))
 	assert.equal(session.record.history.length, 2)
 	const msgs = session.buildMessages("дальше")
 	assert.ok(msgs.some((m) => m.content.startsWith("СЖАТАЯ ИСТОРИЯ")))

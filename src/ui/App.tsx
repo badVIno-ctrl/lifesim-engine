@@ -6,6 +6,7 @@ import { createGameRecord } from "../session.ts"
 import { titleFor } from "../init.ts"
 import { createBrowserStorage } from "../storage/indexeddb.ts"
 import type { GameRecord, GameSummary } from "../storage/types.ts"
+import type { Tuning } from "../tuning.ts"
 import { loadSettings, saveSettings } from "./settings.ts"
 import type { Settings } from "./settings.ts"
 import { StartScreen } from "./screens/StartScreen.tsx"
@@ -18,7 +19,7 @@ type Route =
 	| { name: "start" }
 	| { name: "settings" }
 	| { name: "pack" }
-	| { name: "init"; packId: string }
+	| { name: "init"; packId: string; tuning: Tuning }
 	| { name: "game"; gameId: string }
 
 function newId(): string {
@@ -135,7 +136,7 @@ export function App() {
 		return (
 			<PackScreen
 				onBack={() => setRoute({ name: "start" })}
-				onPick={(packId) => setRoute({ name: "init", packId })}
+				onPick={(packId, tuning) => setRoute({ name: "init", packId, tuning })}
 			/>
 		)
 	}
@@ -144,6 +145,7 @@ export function App() {
 		return (
 			<InitWizard
 				packId={route.packId}
+				tuning={route.tuning}
 				onBack={() => setRoute({ name: "pack" })}
 				onDone={async (state) => {
 					const rec = createGameRecord({

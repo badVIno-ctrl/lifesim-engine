@@ -2,8 +2,10 @@
 // prompt/INIT.md — человеческое описание тех же восьми шагов; test/init.test.ts сверяет списки.
 // INIT.md никогда не попадает в контекст игры: Session собирает только CORE + DELTA-SCHEMA.
 import { normalizeState } from "./engine.ts"
+import { readTuning } from "./tuning.ts"
 import { stateFromPack } from "./packs.ts"
 import type { Pack } from "./packs.ts"
+import type { Tuning } from "./tuning.ts"
 import type { State, WorldLevel } from "./types.ts"
 
 export type InitStepId =
@@ -195,9 +197,11 @@ function stripEmpty(a: InitAnswers): InitAnswers {
  * Пак даёт каркас мира (якоря, фронты, крючки, unknowns), ответы игрока перекрывают личное.
  * Модель в этом не участвует: числа ставит код.
  */
-export function buildStateFromAnswers(pack: Pack, answers: InitAnswers): State {
+export function buildStateFromAnswers(pack: Pack, answers: InitAnswers, tuning?: Tuning): State {
 	const s = stateFromPack(pack)
 	const a = { ...allDefaults(pack), ...stripEmpty(answers) }
+	// Правила партии выбираются до первого хода и живут в состоянии, а не в настройках приложения.
+	s.tuning = readTuning(tuning ?? s.tuning)
 
 	s.meta.character = (a.character ?? "").trim()
 	s.meta.setting = (a.setting ?? "").trim()

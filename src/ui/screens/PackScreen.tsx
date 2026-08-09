@@ -2,9 +2,15 @@
 // Список собирается из packs/*.json на этапе сборки: добавление пака — это файл, а не правка кода.
 import { useMemo, useState } from "react"
 import { Notice, Screen } from "../components/Screen.tsx"
+import { TuningCard } from "../components/TuningCard.tsx"
 import { packs } from "../assets.ts"
+import { tuningOf } from "../../tuning.ts"
+import type { Tuning } from "../../tuning.ts"
 
-export function PackScreen(props: { onBack: () => void; onPick: (packId: string) => void }) {
+export function PackScreen(props: {
+	onBack: () => void
+	onPick: (packId: string, tuning: Tuning) => void
+}) {
 	const list = useMemo(() => {
 		try {
 			return { items: packs(), error: null as string | null }
@@ -13,6 +19,13 @@ export function PackScreen(props: { onBack: () => void; onPick: (packId: string)
 		}
 	}, [])
 	const [picked, setPicked] = useState<string | null>(list.items[0]?.id ?? null)
+	// Пак приносит свои правила; игрок вправе их переписать до первого хода.
+	const packTuning = useMemo(
+		() => tuningOf(list.items.find((p) => p.id === picked)?.state),
+		[list.items, picked],
+	)
+	const [tuning, setTuning] = useState<Tuning | null>(null)
+	const active = tuning ?? packTuning
 
 	return (
 		<Screen title="Новая партия" subtitle="выберите мир" onBack={props.onBack}>
@@ -39,11 +52,13 @@ export function PackScreen(props: { onBack: () => void; onPick: (packId: string)
 					</button>
 				))}
 
+				<TuningCard value={active} onChange={setTuning} />
+
 				<button
 					type="button"
 					className="primary wide"
 					disabled={!picked}
-					onClick={() => picked && props.onPick(picked)}
+					onClick={() => picked && props.onPick(picked, active)}
 				>
 					Дальше — инициация
 				</button>

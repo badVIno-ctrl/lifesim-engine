@@ -2,6 +2,7 @@
 // Модель никогда не пишет снапшот и микро-лог руками — это делает код (H).
 import { LADDERS, bar, clockLabel, phaseOf } from "./ladders.ts"
 import { audit, calendarPressure } from "./engine.ts"
+import { describeTuning, tuningOf } from "./tuning.ts"
 import type { Directive, EngineFact, State } from "./types.ts"
 
 function line(label: string, value: string): string {
@@ -90,6 +91,9 @@ export function renderSnapshot(s: State, opts: { spoilers?: boolean } = {}): str
 	if (s.revelations.length) {
 		out.push(line("Переломы", s.revelations.map((r) => `ход ${r.turn}: ${r.what}`).join("; ")))
 	}
+	if (s.scars.length) {
+		out.push(line("Шрамы (необратимо)", s.scars.map((x) => `${x.what} ← ${x.cause}`).join("; ")))
+	}
 	if (s.precedents.length) out.push(line("Прецеденты", s.precedents.join("; ")))
 	if (spoilers) {
 		out.push("")
@@ -130,6 +134,7 @@ export function renderSnapshot(s: State, opts: { spoilers?: boolean } = {}): str
 	}
 	const issues = audit(s)
 	out.push("")
+	out.push(line("Правила партии", describeTuning(tuningOf(s))))
 	out.push(line("Сверка", issues.length ? issues.join("; ") : "чисто"))
 	return out.join("\n")
 }
@@ -151,6 +156,9 @@ export function renderStateForModel(s: State): string {
 	out.push(
 		`Тело: ${LADDERS.health[c.health]}; раны — ${woundsLine(s)}; кровопотеря — ${LADDERS.bleed[c.bleed]}; усталость — ${LADDERS.fatigue[c.fatigue]}; голод — ${LADDERS.hunger[c.hunger]}; жажда — ${LADDERS.thirst[c.thirst]}; стресс — ${LADDERS.stress[c.stress.level]} [${bar(c.stress.segments)}]`,
 	)
+	if (s.scars.length) {
+		out.push(`Необратимое (не лечится, не отменяется): ${s.scars.map((x) => x.what).join("; ")}`)
+	}
 	out.push(`Константы: сила ${s.constants.str}, ловкость ${s.constants.dex}, ум ${s.constants.int}, обаяние ${s.constants.cha}, воля ${s.constants.wil}`)
 	out.push(`Касса: ${moneyLine(s)}`)
 	out.push(`Имущество: ${inventoryLine(s)}`)
@@ -176,6 +184,7 @@ export function renderStateForModel(s: State): string {
 		`Отложенные последствия: ${s.consequences.map((x) => `${x.what} ← ${x.cause}`).join("; ") || "нет"}`,
 	)
 	out.push(`Якоря цен: ${renderPrices(s)}`)
+	out.push(`Правила партии: ${describeTuning(tuningOf(s))}`)
 	return out.join("\n")
 }
 

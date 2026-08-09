@@ -2,6 +2,8 @@
 // Состояние — единственный источник истины. Модель его не хранит.
 // Файл изоморфный: ни fs, ни path, ни process.
 
+import type { Tuning } from "./tuning.ts"
+
 export type WorldLevel = "щадящий" | "суровый" | "беспощадный"
 export type Channel = "зрение" | "звук" | "тело" | "запах" | "вкус"
 
@@ -14,6 +16,8 @@ export type Npc = {
 	name: string
 	attitude: number // индекс в LADDERS.attitude
 	lastContactTurn: number
+	/** Дрейф отношений считается по игровым дням: ход бывает и минутой, и тремя днями. */
+	lastContactDay?: number
 	promises: string[]
 	/** Почему отношение такое. Переживает сжатие истории. */
 	lastReason?: string
@@ -46,7 +50,37 @@ export type Hook = {
 }
 
 export type Consequence = { what: string; cause: string; window: number; addedTurn: number }
-export type Obligation = { what: string; amount?: number; dueDay?: number }
+
+/**
+ * D. Обязательство — это календарь, из которого движок делает давление.
+ * `stage` — докуда доехала эскалация просрочки: 0 ещё не просрочено,
+ * 1 косвенный сигнал, 2 прямая угроза, 3 мир уже действовал сам.
+ */
+export type Obligation = { what: string; amount?: number; dueDay?: number; stage?: number }
+
+/**
+ * Необратимое увечье: цена спасения, когда правило смерти — «шрам».
+ * Шрам не лечится и остаётся в состоянии до конца партии.
+ */
+export type Scar = { what: string; cause: string; turn: number; day: number }
+
+/**
+ * Журнал выданных директив. Без него требования движка живут вечно,
+ * и модель — что живая, что своя — учится их игнорировать.
+ */
+export type DirectiveRecord = {
+	/** Код директивы плюс её предмет: `obligation_due:долг Марте`. */
+	key: string
+	code: string
+	text: string
+	issuedTurn: number
+	/** Сколько ходов подряд движок это требовал. */
+	attempts: number
+	/** Ход, на котором требование было отработано. */
+	satisfiedTurn: number | null
+	/** Ход, на котором движок перестал требовать и решил сам. */
+	retiredTurn: number | null
+}
 
 export type Stress = { level: number; segments: number } // level: индекс в LADDERS.stress
 
@@ -56,6 +90,12 @@ export type Revelation = { turn: number; criterion: RevelationCriterion; what: s
 
 export type State = {
 	version: "13.1"
+	/**
+	 * Настройка вкуса живёт в партии, а не в настройках приложения: две партии
+	 * идут по разным правилам, и экспорт везёт правила с собой.
+	 * Читать только через `tuningOf` из src/tuning.ts — никогда напрямую.
+	 */
+	tuning: Tuning
 	meta: {
 		character: string
 		setting: string
@@ -80,6 +120,8 @@ export type State = {
 		stress: Stress
 	}
 	effects: Effect[]
+	/** Необратимые увечья. Только пополняются, никогда не убираются. */
+	scars: Scar[]
 	milestones: number // 0..5
 	revelations: Revelation[]
 	inventory: Item[]
@@ -95,6 +137,8 @@ export type State = {
 	lastUnknownAddTurn: number
 	precedents: string[]
 	goals: string[]
+	/** Журнал требований движка: что выдано, что отработано, что снято. */
+	directiveLog: DirectiveRecord[]
 	channelHistory: Channel[]
 	ledger: { turn: number; text: string }[]
 	economy: { anchors: Record<string, number>; regionMultiplier: number }
@@ -211,8 +255,13 @@ export type EngineFact = {
 	forModel: boolean
 }
 
-/** D/F. Обязательное к отработке в текущем ходу, посчитанное по календарю. */
-export type Directive = { code: string; text: string }
+/**
+ * D/F. Обязательное к отработке в текущем ходу, посчитанное по календарю.
+ * `subject` — предмет требования (обязательство, фронт, последствие): по нему
+ * директива опознаётся в журнале между ходами.
+ * `stage` — ступень эскалации, если директива её имеет.
+ */
+export type Directive = { code: string; text: string; subject?: string; stage?: number }
 
 export type ApplyResult = {
 	state: State
